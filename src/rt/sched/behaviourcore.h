@@ -290,9 +290,11 @@ namespace verona::rt
 #endif
       };
 
+#if 0
       if (count > 1)
         std::sort(indexes.get(), indexes.get() + count, compare);
-
+#endif
+      
       // Execution count - we will remove at least
       // one from the execution count on finishing phase 2 of the
       // 2PL. This ensures that the behaviour cannot be
