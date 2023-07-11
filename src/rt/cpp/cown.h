@@ -314,6 +314,12 @@ namespace verona::cpp
       return {allocated_cown};
     }
 
+    void prefetch() const
+    {
+      if (allocated_cown != nullptr)
+        __builtin_prefetch(&allocated_cown->value);
+    }
+
     ~cown_ptr()
     {
       clear();
