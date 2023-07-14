@@ -38,13 +38,16 @@ namespace verona::rt
   public:
     static void acquire(Object* o)
     {
+#if 0
       Logging::cout() << "Shared " << o << " acquire" << Logging::endl;
       assert(o->debug_is_shared());
       o->incref();
+#endif
     }
 
     static void release(Alloc& alloc, Shared* o)
     {
+#if 0
       Logging::cout() << "Shared " << o << " release" << Logging::endl;
       assert(o->debug_is_shared());
 
@@ -70,6 +73,7 @@ namespace verona::rt
 
       // If last, then collect the cown body.
       o->queue_collect(alloc);
+#endif
     }
 
     /**
@@ -212,9 +216,11 @@ namespace verona::rt
   namespace shared
   {
     inline void release(Alloc& alloc, Object* o)
+#if 0
     {
       assert(o->debug_is_shared());
       Shared::release(alloc, (Shared*)o);
     }
+#endif
   } // namespace cown
 } // namespace verona::rt
