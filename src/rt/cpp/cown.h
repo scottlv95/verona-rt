@@ -61,6 +61,9 @@ namespace verona::cpp
 
     template<typename TT, typename... Args>
     friend cown_ptr<TT> make_cown_custom(void *addr, Args&&... ts);
+
+    template<typename TT>
+    friend cown_ptr<TT> get_cown_ptr_from_addr(void *addr);
   };
 
   /**
@@ -274,6 +277,13 @@ namespace verona::cpp
       other.allocated_cown = nullptr;
       return *this;
     }
+    
+#if 0
+    static cown_ptr from_addr(void* addr)
+    {
+      return cown_ptr(reinterpret_cast<ActualCown<T>*>(addr));
+    }
+#endif
 
     operator bool() const
     {
@@ -349,6 +359,9 @@ namespace verona::cpp
 
     template<typename...>
     friend class When;
+
+    template<typename TT>
+    friend cown_ptr<TT> get_cown_ptr_from_addr(void *addr);
   };
 
   /* A cown_ptr<const T> is used to mark that the cown is being accessed as
@@ -400,6 +413,13 @@ namespace verona::cpp
     return cown_ptr<T>(new (addr) ActualCown<T>(std::forward<Args>(ts)...));
   }
 
+  template<typename T>
+  cown_ptr<T> get_cown_ptr_from_addr(void* addr)
+  {
+    ActualCown<T>* cown_ptr_addr = reinterpret_cast<ActualCown<T>*>(addr + 32);
+    return cown_ptr(cown_ptr_addr);
+  }
+  
   template<typename T>
   bool operator==(std::nullptr_t, const cown_ptr<T>& rhs)
   {
