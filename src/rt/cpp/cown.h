@@ -391,7 +391,6 @@ namespace verona::cpp
   template<typename T, typename... Args>
   cown_ptr<T> make_cown_custom(void *addr, Args&&... ts)
   {
-    std::cout << "Will make custom allocated cown\n";
     static_assert(
       !std::is_const_v<T>,
       "Cannot make a cown of const type as this conflicts with read acquire "
