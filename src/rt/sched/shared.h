@@ -216,11 +216,11 @@ namespace verona::rt
   namespace shared
   {
     inline void release(Alloc& alloc, Object* o)
-#if 0
     {
+#if 0
       assert(o->debug_is_shared());
       Shared::release(alloc, (Shared*)o);
-    }
 #endif
+    }
   } // namespace cown
 } // namespace verona::rt
