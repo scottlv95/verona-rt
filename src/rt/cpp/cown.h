@@ -320,6 +320,11 @@ namespace verona::cpp
         __builtin_prefetch(&allocated_cown->value);
     }
 
+    uint64_t get_base_addr() const
+    {
+      return reinterpret_cast<uint64_t>(allocated_cown);
+    }
+
     ~cown_ptr()
     {
       clear();
