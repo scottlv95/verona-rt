@@ -12,8 +12,8 @@ namespace verona::rt
 {
   using namespace snmalloc;
 
-  constexpr uint32_t MEM_ARRAY_SIZE = 64*1024;
-  constexpr uint32_t MEM_ARRAY_ELEM_SIZE = 128;
+  constexpr uint32_t MEM_ARRAY_SIZE = 64*1024*16;
+  constexpr uint32_t MEM_ARRAY_ELEM_SIZE = 512;
   constexpr uint32_t MEM_ARRAY_ELEM_COUNT = MEM_ARRAY_SIZE / MEM_ARRAY_ELEM_SIZE;
 
   class Request
@@ -135,7 +135,6 @@ namespace verona::rt
     static inline char mem_array[MEM_ARRAY_SIZE * MEM_ARRAY_ELEM_SIZE];
     static inline uint32_t mem_array_idx = 0;
 
-
     /**
      * @brief Construct a new Behaviour object
      *
@@ -219,6 +218,9 @@ namespace verona::rt
         mem_array_idx=0;
 
       Work* work = new (base) Work(f);
+      //work->next_in_queue.store(nullptr, std::memory_order_relaxed);
+      //std::atomic_thread_fence(std::memory_order_seq_cst);
+
       void* base_behaviour = from_work(work);
       BehaviourCore* behaviour = new (base_behaviour) BehaviourCore(count);
 
