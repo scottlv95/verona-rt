@@ -132,7 +132,8 @@ namespace verona::rt
     std::atomic<size_t> exec_count_down;
     size_t count;
 
-    static inline char mem_array[MEM_ARRAY_SIZE * MEM_ARRAY_ELEM_SIZE];
+    //static inline char mem_array[MEM_ARRAY_SIZE * MEM_ARRAY_ELEM_SIZE];
+    static inline char* mem_array;
     static inline uint32_t mem_array_idx = 0;
 
     /**
@@ -213,11 +214,36 @@ namespace verona::rt
       size_t size =
         sizeof(Work) + sizeof(BehaviourCore) + (sizeof(Slot) * count) + payload;
       //void* base = ThreadAlloc::get().alloc(size);
-      void* base = &mem_array[mem_array_idx++ * MEM_ARRAY_ELEM_SIZE];
-      if (mem_array_idx>=MEM_ARRAY_ELEM_COUNT)
-        mem_array_idx=0;
+     
+      if (mem_array == nullptr) 
+      {
+        size_t arr_sz = MEM_ARRAY_SIZE * MEM_ARRAY_ELEM_SIZE;
+        if (posix_memalign(reinterpret_cast<void**>(&mem_array), 
+          1 << 21, // HUGE_PAGE - 2MB
+          arr_sz) != 0)
+          std::cout << "failed to alloc hugepage\n" << std::endl;
 
-      Work* work = new (base) Work(f);
+        madvise(mem_array, arr_sz, MADV_HUGEPAGE);
+        memset(mem_array, 0, arr_sz);
+      }
+
+#if 0
+      void* base = &mem_array[mem_array_idx++ * MEM_ARRAY_ELEM_SIZE];
+      if (mem_array_idx >= MEM_ARRAY_ELEM_COUNT)
+        mem_array_idx = 0;
+#endif
+
+      // find unused entry
+      char* base;
+      do {
+        base = &mem_array[mem_array_idx++ * MEM_ARRAY_ELEM_SIZE];
+        if (mem_array_idx >= MEM_ARRAY_ELEM_COUNT)
+          mem_array_idx = 0;
+      } while (*base == 'x');
+
+      *base = 'x';
+
+      Work* work = new (reinterpret_cast<void*>(base + 1)) Work(f);
       //work->next_in_queue.store(nullptr, std::memory_order_relaxed);
       //std::atomic_thread_fence(std::memory_order_seq_cst);
 

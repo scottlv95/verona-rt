@@ -24,7 +24,10 @@ namespace verona::rt
 
       // Dealloc behaviour
       body->~Be();
+      //work->next_in_queue.store(nullptr, std::memory_order_relaxed);
       //work->dealloc();
+      *(reinterpret_cast<char*>
+        (reinterpret_cast<void*>(work)- 1)) = 'a';
     }
 
   public:
