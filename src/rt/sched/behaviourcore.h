@@ -347,8 +347,21 @@ namespace verona::rt
       for (size_t i = 0; i < count; i++)
       {
         auto cown = slots[indexes[i]].cown;
+#if 0
         auto prev = cown->last_slot.exchange(
           &slots[indexes[i]], std::memory_order_acq_rel);
+#endif
+        auto prev = cown->last_slot.load(std::memory_order_acquire);
+
+        if (prev == nullptr)
+        {
+          cown->last_slot.store(&slots[indexes[i]], std::memory_order_release);
+        }
+        else
+        {
+          prev =
+            cown->last_slot.exchange(&slots[indexes[i]], std::memory_order_acq_rel);
+        }
 
         yield();
 
