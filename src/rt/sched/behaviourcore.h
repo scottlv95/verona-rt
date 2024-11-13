@@ -13,7 +13,7 @@ namespace verona::rt
   using namespace snmalloc;
 
   constexpr uint32_t MEM_ARRAY_SIZE = 64*1024*16;
-  constexpr uint32_t MEM_ARRAY_ELEM_SIZE = 512;
+  constexpr uint32_t MEM_ARRAY_ELEM_SIZE = 896;
   constexpr uint32_t MEM_ARRAY_ELEM_COUNT = MEM_ARRAY_SIZE / MEM_ARRAY_ELEM_SIZE;
 
   class Request
