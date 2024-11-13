@@ -416,7 +416,7 @@ namespace verona::cpp
   template<typename T>
   cown_ptr<T> get_cown_ptr_from_addr(void* addr)
   {
-    ActualCown<T>* cown_ptr_addr = reinterpret_cast<ActualCown<T>*>(addr + 32);
+    ActualCown<T>* cown_ptr_addr = reinterpret_cast<ActualCown<T>*>(addr);
     return cown_ptr(cown_ptr_addr);
   }
   
