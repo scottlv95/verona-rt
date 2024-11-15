@@ -71,7 +71,7 @@ namespace verona::rt
     }
 
   public:
-    BagBase<E, Alloc>() : index(null_index), next_free(nullptr)
+    BagBase() : index(null_index), next_free(nullptr)
     {
       static_assert(
         sizeof(*this) == sizeof(void*) * 2,
@@ -246,7 +246,7 @@ namespace verona::rt
     using iterator = typename B::iterator;
 
   public:
-    Bag<T, U, Alloc>() : BagBase<Elem, Alloc>() {}
+    Bag() : BagBase<Elem, Alloc>() {}
   };
 
   template<class T>
@@ -271,7 +271,7 @@ namespace verona::rt
     using iterator = typename B::iterator;
 
   public:
-    BagThin<T, Alloc>() : BagBase<Elem, Alloc>() {}
+    BagThin() : BagBase<Elem, Alloc>() {}
   };
 
 } // namespace verona::rt
