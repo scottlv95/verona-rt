@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT
 #include <debug/harness.h>
 #include <random>
-#include <test/xoroshiro.h>
 
 /**
  * This tests the cown leak detector. This is a variant of cowngc1.
@@ -30,40 +29,6 @@
  * We expect the LD to properly handle the cowns, shared cowns, and all
  * messages, including in-flight messages.
  **/
-
-struct PRNG
-{
-#ifdef USE_SYSTEMATIC_TESTING
-  // Use xoroshiro for systematic testing, because it's simple and
-  // and deterministic across platforms.
-  xoroshiro::p128r64 rand;
-#else
-  // We don't mind data races for our PRNG, because concurrent testing means
-  // our results will already be nondeterministic. However, data races may
-  // cause xoroshiro to abort.
-  std::mt19937_64 rand;
-#endif
-
-  PRNG(size_t seed) : rand(seed) {}
-
-  uint64_t next()
-  {
-#ifdef USE_SYSTEMATIC_TESTING
-    return rand.next();
-#else
-    return rand();
-#endif
-  }
-
-  void seed(size_t seed)
-  {
-#ifdef USE_SYSTEMATIC_TESTING
-    return rand.set_state(seed);
-#else
-    return rand.seed(seed);
-#endif
-  }
-};
 
 struct CCown : public VCown<CCown>
 {
@@ -136,8 +101,6 @@ struct RCown : public VCown<RCown<region_type>>
   RCown(size_t more, uint64_t forward_count)
   : forward(forward_count), threshold(forward_count / 4)
   {
-    auto& alloc = ThreadAlloc::get();
-
     if (rcown_first == nullptr)
       rcown_first = (RCown<RegionType::Trace>*)this;
 
@@ -158,8 +121,7 @@ struct RCown : public VCown<RCown<region_type>>
         // Construct a CCown and give it to the region.
         auto c = new CCown(shared_child);
         Logging::cout() << "  child " << c << std::endl;
-        RegionClass::template insert<TransferOwnership::YesTransfer>(
-          alloc, r, c);
+        RegionClass::template insert<TransferOwnership::YesTransfer>(r, c);
         Cown::acquire(shared_child); // acquire on behalf of child CCown
 
         reg_with_graph = r;
@@ -177,8 +139,7 @@ struct RCown : public VCown<RCown<region_type>>
       // Construct a CCown and give it to the last region.
       auto c = new CCown(shared_child);
       Logging::cout() << "  child " << c << std::endl;
-      RegionArena::insert<TransferOwnership::YesTransfer>(
-        alloc, r->f1->f2->f2, c);
+      RegionArena::insert<TransferOwnership::YesTransfer>(r->f1->f2->f2, c);
       Cown::acquire(shared_child); // acquire on behalf of child CCown
 
       reg_with_sub = r;
@@ -225,15 +186,15 @@ struct RCown : public VCown<RCown<region_type>>
 
       // Transfer ownership of immutables to the region.
       RegionClass::template insert<TransferOwnership::YesTransfer>(
-        alloc, reg_with_imm, r1);
+        reg_with_imm, r1);
       RegionClass::template insert<TransferOwnership::YesTransfer>(
-        alloc, reg_with_imm, r2);
+        reg_with_imm, r2);
 
       // Release child CCowns that are now owned by the immutables.
-      Cown::release(alloc, r1->cown);
-      Cown::release(alloc, r1->f1->cown);
-      Cown::release(alloc, r2->cown);
-      Cown::release(alloc, r2->f1->cown);
+      Cown::release(r1->cown);
+      Cown::release(r1->f1->cown);
+      Cown::release(r2->cown);
+      Cown::release(r2->f1->cown);
 
       // Want to make sure one of the objects is RC and the other is SCC_PTR.
       check(
@@ -243,7 +204,7 @@ struct RCown : public VCown<RCown<region_type>>
     }
 
     // Release our (RCown's) refcount on the shared_child.
-    Cown::release(alloc, shared_child);
+    Cown::release(shared_child);
 
     if (more != 0)
       next = new Self(more - 1, forward_count);
@@ -279,7 +240,7 @@ struct Pong
     if (ccown->child != nullptr)
     {
       for (int n = 0; n < 20; n++)
-        Behaviour::schedule<Pong>(ccown->child, ccown->child);
+        schedule_lambda(ccown->child, Pong(ccown->child));
     }
   }
 };
@@ -290,15 +251,16 @@ struct Ping
   using RegionClass = typename RegionType_to_class<region_type>::T;
 
   RCown<region_type>* rcown;
-  PRNG* rand;
-  Ping(RCown<region_type>* rcown, PRNG* rand) : rcown(rcown), rand(rand) {}
+  PRNG<true>* rand;
+  Ping(RCown<region_type>* rcown, PRNG<true>* rand) : rcown(rcown), rand(rand)
+  {}
 
   void operator()()
   {
     if (rcown->forward > 0)
     {
       // Forward Ping to next RCown.
-      Behaviour::schedule<Ping<region_type>>(rcown->next, rcown->next, rand);
+      schedule_lambda(rcown->next, Ping<region_type>(rcown->next, rand));
 
       // Send Pongs to child CCowns.
       if (
@@ -306,25 +268,25 @@ struct Ping
         rcown->reg_with_graph->f->f->cown != nullptr)
       {
         auto c = rcown->reg_with_graph->f->f->cown;
-        Behaviour::schedule<Pong>(c, c);
+        schedule_lambda(c, Pong(c));
       }
       if (
         rcown->reg_with_sub != nullptr &&
         rcown->reg_with_sub->f1->f2->f2->cown != nullptr)
       {
         auto c = rcown->reg_with_sub->f1->f2->f2->cown;
-        Behaviour::schedule<Pong>(c, c);
+        schedule_lambda(c, Pong(c));
       }
       if (rcown->reg_with_imm != nullptr)
       {
         auto c1 = rcown->reg_with_imm->imm1->cown;
         auto c2 = rcown->reg_with_imm->imm1->f1->cown;
-        Behaviour::schedule<Pong>(c1, c1);
-        Behaviour::schedule<Pong>(c2, c2);
+        schedule_lambda(c1, Pong(c1));
+        schedule_lambda(c2, Pong(c2));
         c1 = rcown->reg_with_imm->imm2->cown;
         c2 = rcown->reg_with_imm->imm2->f1->cown;
-        Behaviour::schedule<Pong>(c1, c1);
-        Behaviour::schedule<Pong>(c2, c2);
+        schedule_lambda(c1, Pong(c1));
+        schedule_lambda(c2, Pong(c2));
       }
 
       // Randomly introduce a few leaks. We don't want to do this for every
@@ -343,7 +305,7 @@ struct Ping
             Logging::cout() << "RCown " << rcown << " is leaking cown "
                             << rcown->reg_with_graph->f->f->cown << std::endl;
             auto* reg = RegionClass::get(rcown->reg_with_graph);
-            reg->discard(ThreadAlloc::get());
+            reg->discard();
             rcown->reg_with_graph->f->f->cown = nullptr;
           }
           break;
@@ -360,7 +322,7 @@ struct Ping
             Logging::cout() << "RCown " << rcown << " is leaking cown "
                             << rcown->reg_with_sub->f1->f2->f2 << std::endl;
             auto* reg = RegionArena::get(rcown->reg_with_sub->f1->f2->f2);
-            reg->discard(ThreadAlloc::get());
+            reg->discard();
             rcown->reg_with_sub->f1->f2->f2->cown = nullptr;
           }
           break;
@@ -375,7 +337,7 @@ struct Ping
     {
       assert(rcown == (RCown<region_type>*)rcown_first);
       // Clear next pointer on final iteration.
-      Cown::release(ThreadAlloc::get(), rcown->next);
+      Cown::release(rcown->next);
       rcown->next = nullptr;
     }
 
@@ -391,18 +353,18 @@ void test_cown_gc(
   uint64_t forward_count,
   size_t ring_size,
   SystematicTestHarness* h,
-  PRNG* rand)
+  PRNG<true>* rand)
 {
   rcown_first = nullptr;
   auto a = new RCown<region_type>(ring_size, forward_count);
-  rand->seed(h->current_seed());
-  Behaviour::schedule<Ping<region_type>>(a, a, rand);
+  rand->set_seed(h->current_seed());
+  schedule_lambda(a, Ping<region_type>(a, rand));
 }
 
 int main(int argc, char** argv)
 {
   SystematicTestHarness harness(argc, argv);
-  PRNG rand(harness.seed_lower);
+  PRNG<true> rand(harness.seed_lower);
 
   size_t ring = harness.opt.is<size_t>("--ring", 10);
   uint64_t forward = harness.opt.is<uint64_t>("--forward", 10);

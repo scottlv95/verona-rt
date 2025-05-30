@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-#include "behaviourcore.h"
-#include "shared.h"
+#include "../sched/shared.h"
+#include "behaviour.h"
 
 namespace verona::rt
 {
@@ -55,21 +55,16 @@ namespace verona::rt
     static void invoke(Work* work)
     {
       // Dispatch to the body of the behaviour.
-      BehaviourCore* behaviour = BehaviourCore::from_work(work);
-      BehaviourWrapper<Be>* wrapper =
-        behaviour->template get_body<BehaviourWrapper<Be>>();
+      BehaviourCore* b = BehaviourCore::from_work(work);
+      BehaviourWrapper<Be>* wrapper = b->get_body<BehaviourWrapper<Be>>();
+
       Be& body = wrapper->body;
       auto notification = wrapper->notification;
       Logging::cout() << "Notification: Invoked: " << notification << std::endl;
       notification->set_running();
-
       (body)();
 
-      behaviour->release_all();
-      Logging::cout() << "Notification: Released all: " << notification
-                      << std::endl;
-
-      behaviour->reset();
+      BehaviourCore::finished(work, true);
 
       notification->finished_running();
     }
@@ -90,13 +85,12 @@ namespace verona::rt
         ->body.~Be();
 
       auto* slots = notification->behaviour->get_slots();
-      for (size_t i = 0; i < notification->behaviour->count; i++)
+      for (size_t i = 0; i < notification->behaviour->get_count(); i++)
       {
-        Shared::release(ThreadAlloc::get(), slots[i].cown);
+        Shared::release(slots[i].cown());
       }
 
-      // Need to dealloc using ABA protection for fields relating to work.
-      notification->behaviour->as_work()->dealloc();
+      notification->behaviour->dealloc();
     }
 
     /**
@@ -124,7 +118,7 @@ namespace verona::rt
         Systematic::yield();
         Logging::cout() << "Notification: Finished running: "
                         << (int)status.load() << std::endl;
-        Shared::release(ThreadAlloc::get(), this);
+        Shared::release(this);
         return;
       }
 
@@ -138,7 +132,7 @@ namespace verona::rt
     {
       assert(status == Status::Requested);
       Logging::cout() << "Notification: Scheduling: " << std::endl;
-      BehaviourCore::schedule<NoTransfer>(behaviour);
+      BehaviourCore::schedule_many(&behaviour, 1);
     }
 
   public:
@@ -194,7 +188,7 @@ namespace verona::rt
       new (&(wrapper->body)) Be(std::forward<Args>(args)...);
 
       // Allocate the notification object.
-      void* base = ThreadAlloc::get().alloc<vsizeof<Notification>>();
+      void* base = heap::alloc<vsizeof<Notification>>();
       Object* o = Object::register_object(base, descriptor<Be>());
       auto notification = new (o) Notification();
 

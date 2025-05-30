@@ -18,7 +18,6 @@
 
 #include "debug/log.h"
 #include "test/opt.h"
-#include "test/xoroshiro.h"
 #include "verona.h"
 
 #include <chrono>
@@ -37,7 +36,7 @@ namespace ubench
   struct Pinger : public rt::VCown<Pinger>
   {
     vector<Pinger*>& pingers;
-    xoroshiro::p128r32 rng;
+    rt::PRNG<> rng;
     size_t select_mod = 0;
     bool running = false;
     size_t count = 0;
@@ -97,7 +96,7 @@ namespace ubench
         ((pinger->rng.next() % pinger->select_mod) == 0);
       if (!send_multimessage)
       {
-        rt::Behaviour::schedule<Ping>(recipients[0], recipients[0]);
+        schedule_lambda(recipients[0], Ping(recipients[0]));
         return;
       }
 
@@ -108,25 +107,11 @@ namespace ubench
           pinger->pingers[pinger->rng.next() % pinger->pingers.size()];
       } while (recipients[1] == pinger);
 
-      rt::Behaviour::schedule<Ping>(
-        2, (rt::Cown**)recipients.data(), recipients[0]);
+      schedule_lambda(2, (rt::Cown**)recipients.data(), Ping(recipients[0]));
     }
   };
 
-  struct Stop;
-  struct StopPinger;
-  struct NotifyStopped;
-  struct Report;
-
-  static void start_timer(Monitor* monitor, std::chrono::milliseconds timeout)
-  {
-    rt::Cown::acquire(monitor);
-    std::thread([=]() mutable {
-      std::this_thread::sleep_for(timeout);
-      rt::Behaviour::schedule<Stop, rt::YesTransfer>(
-        (rt::Cown*)monitor, monitor);
-    }).detach();
-  }
+  static void start_timer(Monitor* monitor, std::chrono::milliseconds timeout);
 
   struct Start
   {
@@ -142,64 +127,11 @@ namespace ubench
         p->count = 0;
         p->running = true;
         for (size_t i = 0; i < monitor->initial_pings; i++)
-          rt::Behaviour::schedule<Ping>(p, p);
+          schedule_lambda(p, Ping(p));
       }
 
       monitor->start = sn::Aal::tick();
       start_timer(monitor, monitor->report_interval);
-    }
-  };
-
-  struct Stop
-  {
-    Monitor* monitor;
-
-    Stop(Monitor* monitor_) : monitor(monitor_) {}
-
-    void operator()()
-    {
-      monitor->waiting = monitor->pingers.size();
-      for (auto* pinger : monitor->pingers)
-        rt::Behaviour::schedule<StopPinger>(pinger, pinger, monitor);
-    }
-  };
-
-  struct StopPinger
-  {
-    Pinger* pinger;
-    Monitor* monitor;
-
-    StopPinger(Pinger* pinger_, Monitor* monitor_)
-    : pinger(pinger_), monitor(monitor_)
-    {}
-
-    void operator()()
-    {
-      pinger->running = false;
-      rt::Behaviour::schedule<NotifyStopped>(monitor, monitor);
-    }
-  };
-
-  struct NotifyStopped
-  {
-    Monitor* monitor;
-
-    NotifyStopped(Monitor* monitor_) : monitor(monitor_) {}
-
-    void operator()()
-    {
-      if (--monitor->waiting != 0)
-        return;
-
-      rt::Behaviour::schedule<Report>(all_cowns_count, all_cowns, monitor);
-
-      // Drop count, Start will reincrease if more external work is needed.
-      rt::Scheduler::remove_external_event_source();
-
-      if (--monitor->report_count != 0)
-        rt::Behaviour::schedule<Start>(all_cowns_count, all_cowns, monitor);
-      else
-        rt::Cown::release(sn::ThreadAlloc::get(), monitor);
     }
   };
 
@@ -225,6 +157,68 @@ namespace ubench
       logger::cout() << t << " ns, " << rate << " msgs/s" << std::endl;
     }
   };
+
+  struct NotifyStopped
+  {
+    Monitor* monitor;
+
+    NotifyStopped(Monitor* monitor_) : monitor(monitor_) {}
+
+    void operator()()
+    {
+      if (--monitor->waiting != 0)
+        return;
+
+      schedule_lambda(all_cowns_count, all_cowns, Report(monitor));
+
+      // Drop count, Start will reincrease if more external work is needed.
+      rt::Scheduler::remove_external_event_source();
+
+      if (--monitor->report_count != 0)
+        schedule_lambda(all_cowns_count, all_cowns, Start(monitor));
+      else
+        rt::Cown::release(monitor);
+    }
+  };
+
+  struct StopPinger
+  {
+    Pinger* pinger;
+    Monitor* monitor;
+
+    StopPinger(Pinger* pinger_, Monitor* monitor_)
+    : pinger(pinger_), monitor(monitor_)
+    {}
+
+    void operator()()
+    {
+      pinger->running = false;
+      schedule_lambda(monitor, NotifyStopped(monitor));
+    }
+  };
+
+  struct Stop
+  {
+    Monitor* monitor;
+
+    Stop(Monitor* monitor_) : monitor(monitor_) {}
+
+    void operator()()
+    {
+      monitor->waiting = monitor->pingers.size();
+      for (auto* pinger : monitor->pingers)
+        schedule_lambda(pinger, StopPinger(pinger, monitor));
+    }
+  };
+
+  static void start_timer(Monitor* monitor, std::chrono::milliseconds timeout)
+  {
+    rt::Cown::acquire(monitor);
+    std::thread([=]() mutable {
+      std::this_thread::sleep_for(timeout);
+      schedule_lambda<rt::YesTransfer>(monitor, Stop(monitor));
+    }).detach();
+  }
 }
 
 using namespace ubench;
@@ -249,7 +243,6 @@ int main(int argc, char** argv)
                  << ", percent_mutlimessage: " << percent_multimessage
                  << std::endl;
 
-  auto& alloc = sn::ThreadAlloc::get();
 #ifdef USE_SYSTEMATIC_TESTING
   Logging::enable_logging();
   Systematic::set_seed(seed);
@@ -262,19 +255,19 @@ int main(int argc, char** argv)
 
   static vector<Pinger*> pinger_set;
   for (size_t p = 0; p < pingers; p++)
-    pinger_set.push_back(new (alloc)
-                           Pinger(pinger_set, seed + p, percent_multimessage));
+    pinger_set.push_back(
+      new Pinger(pinger_set, seed + p, percent_multimessage));
 
-  auto* monitor = new (alloc)
-    Monitor(pinger_set, initial_pings, report_interval, report_count);
+  auto* monitor =
+    new Monitor(pinger_set, initial_pings, report_interval, report_count);
 
   all_cowns_count = pingers + 1;
-  all_cowns = (rt::Cown**)alloc.alloc(all_cowns_count * sizeof(rt::Cown*));
+  all_cowns = (rt::Cown**)heap::alloc(all_cowns_count * sizeof(rt::Cown*));
   memcpy(all_cowns, pinger_set.data(), pinger_set.size() * sizeof(rt::Cown*));
   all_cowns[pinger_set.size()] = monitor;
-  rt::Behaviour::schedule<ubench::Start>(all_cowns_count, all_cowns, monitor);
+  schedule_lambda(all_cowns_count, all_cowns, ubench::Start(monitor));
 
   sched.run();
-  alloc.dealloc(all_cowns, all_cowns_count * sizeof(rt::Cown*));
+  heap::dealloc(all_cowns, all_cowns_count * sizeof(rt::Cown*));
   return 0;
 }

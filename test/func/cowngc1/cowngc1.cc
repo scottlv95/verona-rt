@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT
 #include <debug/harness.h>
 #include <random>
-#include <test/xoroshiro.h>
 
 /**
  * This tests the cown leak detector.
@@ -40,40 +39,6 @@
  * Second test:
  * Check that the LD runs even if no work is scheduled.
  **/
-
-struct PRNG
-{
-#ifdef USE_SYSTEMATIC_TESTING
-  // Use xoroshiro for systematic testing, because it's simple and
-  // and deterministic across platforms.
-  xoroshiro::p128r64 rand;
-#else
-  // We don't mind data races for our PRNG, because concurrent testing means
-  // our results will already be nondeterministic. However, data races may
-  // cause xoroshiro to abort.
-  std::mt19937_64 rand;
-#endif
-
-  PRNG(size_t seed) : rand(seed) {}
-
-  uint64_t next()
-  {
-#ifdef USE_SYSTEMATIC_TESTING
-    return rand.next();
-#else
-    return rand();
-#endif
-  }
-
-  void seed(size_t seed)
-  {
-#ifdef USE_SYSTEMATIC_TESTING
-    return rand.set_state(seed);
-#else
-    return rand.seed(seed);
-#endif
-  }
-};
 
 static constexpr uint64_t others_count = 3;
 
@@ -123,8 +88,6 @@ struct RCown : public VCown<RCown>
 
   RCown(size_t more, uint64_t forward_count) : forward(forward_count)
   {
-    auto& alloc = ThreadAlloc::get();
-
     if (rcown_first == nullptr)
       rcown_first = this;
 
@@ -149,8 +112,7 @@ struct RCown : public VCown<RCown>
       otrace->cown = new CCown(shared_child);
       Logging::cout() << "  child " << otrace->cown << std::endl;
       // Transfer ownership of child CCown to the regions.
-      RegionTrace::insert<TransferOwnership::YesTransfer>(
-        alloc, otrace, otrace->cown);
+      RegionTrace::insert<TransferOwnership::YesTransfer>(otrace, otrace->cown);
       Cown::acquire(shared_child); // acquire on behalf of child CCown
     }
 
@@ -160,8 +122,7 @@ struct RCown : public VCown<RCown>
       oarena->cown = new CCown(shared_child);
       Logging::cout() << "  child " << oarena->cown << std::endl;
       // Transfer ownership of child CCown to the regions.
-      RegionArena::insert<TransferOwnership::YesTransfer>(
-        alloc, oarena, oarena->cown);
+      RegionArena::insert<TransferOwnership::YesTransfer>(oarena, oarena->cown);
       Cown::acquire(shared_child); // acquire on behalf of child CCown
     }
 
@@ -201,10 +162,10 @@ struct RCown : public VCown<RCown>
       imm2 = r2->f1;
 
       // Release child CCowns that are now owned by the immutables.
-      Cown::release(alloc, r1->cown);
-      Cown::release(alloc, r1->f1->cown);
-      Cown::release(alloc, r2->cown);
-      Cown::release(alloc, r2->f1->cown);
+      Cown::release(r1->cown);
+      Cown::release(r1->f1->cown);
+      Cown::release(r2->cown);
+      Cown::release(r2->f1->cown);
 
       // Want to make sure one of the objects is RC and the other is SCC_PTR.
       check(imm1->debug_is_rc() || imm2->debug_is_rc());
@@ -212,7 +173,7 @@ struct RCown : public VCown<RCown>
     }
 
     // Release our (RCown's) refcount on the shared_child.
-    Cown::release(alloc, shared_child);
+    Cown::release(shared_child);
 
     if (more != 0)
       next = new RCown(more - 1, forward_count);
@@ -257,7 +218,7 @@ struct Pong
     if (ccown->child != nullptr)
     {
       for (int n = 0; n < 20; n++)
-        Behaviour::schedule<Pong>(ccown->child, ccown->child);
+        schedule_lambda(ccown->child, Pong(ccown->child));
     }
   }
 };
@@ -265,39 +226,39 @@ struct Pong
 struct Ping
 {
   RCown* rcown;
-  PRNG* rand;
-  Ping(RCown* rcown, PRNG* rand) : rcown(rcown), rand(rand) {}
+  PRNG<true>* rand;
+  Ping(RCown* rcown, PRNG<true>* rand) : rcown(rcown), rand(rand) {}
 
   void operator()()
   {
     if (rcown->forward > 0)
     {
       // Forward Ping to next RCown.
-      Behaviour::schedule<Ping>(rcown->next, rcown->next, rand);
+      schedule_lambda(rcown->next, Ping(rcown->next, rand));
 
       // Send Pongs to child CCowns.
       for (uint64_t i = 0; i < others_count; i++)
       {
         if (rcown->array[i] != nullptr)
-          Behaviour::schedule<Pong>(rcown->array[i], rcown->array[i]);
+          schedule_lambda(rcown->array[i], Pong(rcown->array[i]));
       }
       if (rcown->otrace != nullptr && rcown->otrace->cown != nullptr)
-        Behaviour::schedule<Pong>(rcown->otrace->cown, rcown->otrace->cown);
+        schedule_lambda(rcown->otrace->cown, Pong(rcown->otrace->cown));
       if (rcown->oarena != nullptr && rcown->oarena->cown != nullptr)
-        Behaviour::schedule<Pong>(rcown->oarena->cown, rcown->oarena->cown);
+        schedule_lambda(rcown->oarena->cown, Pong(rcown->oarena->cown));
       if (rcown->imm1 != nullptr)
       {
         auto c1 = rcown->imm1->cown;
         auto c2 = rcown->imm1->f1->cown;
-        Behaviour::schedule<Pong>(c1, c1);
-        Behaviour::schedule<Pong>(c2, c2);
+        schedule_lambda(c1, Pong(c1));
+        schedule_lambda(c2, Pong(c2));
       }
       if (rcown->imm2 != nullptr)
       {
         auto c1 = rcown->imm2->cown;
         auto c2 = rcown->imm2->f1->cown;
-        Behaviour::schedule<Pong>(c1, c1);
-        Behaviour::schedule<Pong>(c2, c2);
+        schedule_lambda(c1, Pong(c1));
+        schedule_lambda(c2, Pong(c2));
       }
 
       // Randomly introduce a pointer nulling operations. We don't want to do
@@ -312,7 +273,7 @@ struct Ping
             Logging::cout()
               << "RCown " << rcown << " is dropping a reference to "
               << rcown->array[idx] << std::endl;
-            Cown::release(ThreadAlloc::get(), rcown->array[idx]);
+            Cown::release(rcown->array[idx]);
             rcown->array[idx] = nullptr;
           }
           break;
@@ -328,7 +289,7 @@ struct Ping
               << "RCown " << rcown << " is dropping a reference to "
               << rcown->otrace->cown << std::endl;
             auto* reg = RegionTrace::get(rcown->otrace);
-            reg->discard(ThreadAlloc::get());
+            reg->discard();
             rcown->otrace->cown = nullptr;
           }
           break;
@@ -344,7 +305,7 @@ struct Ping
               << "RCown " << rcown << " is dropping a reference to "
               << rcown->oarena->cown << std::endl;
             auto* reg = RegionArena::get(rcown->oarena);
-            reg->discard(ThreadAlloc::get());
+            reg->discard();
             rcown->oarena->cown = nullptr;
           }
           break;
@@ -362,7 +323,7 @@ struct Ping
       auto n = rcown->next;
       Logging::cout() << "Break cycle between" << rcown << " and " << n
                       << std::endl;
-      Cown::release(ThreadAlloc::get(), n);
+      Cown::release(n);
       rcown->next = nullptr;
     }
     if (rcown->next == rcown_first)
@@ -376,25 +337,24 @@ void test_cown_gc(
   uint64_t forward_count,
   size_t ring_size,
   SystematicTestHarness* h,
-  PRNG* rand)
+  PRNG<true>* rand)
 {
   rcown_first = nullptr;
   auto a = new RCown(ring_size, forward_count);
-  rand->seed(h->current_seed());
-  Behaviour::schedule<Ping>(a, a, rand);
+  rand->set_seed(h->current_seed());
+  schedule_lambda(a, Ping(a, rand));
 }
 
 void test_cown_gc_before_sched()
 {
   auto a = new CCown(nullptr);
-  auto& alloc = ThreadAlloc::get();
-  Cown::release(alloc, a);
+  Cown::release(a);
 }
 
 int main(int argc, char** argv)
 {
   SystematicTestHarness harness(argc, argv);
-  PRNG rand(harness.seed_lower);
+  PRNG<true> rand(harness.seed_lower);
 
   size_t ring = harness.opt.is<size_t>("--ring", 10);
   uint64_t forward = harness.opt.is<uint64_t>("--forward", 10);

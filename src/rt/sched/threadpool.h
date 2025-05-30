@@ -32,7 +32,7 @@ namespace verona::rt
   {
   private:
     friend T;
-    friend void verona::rt::yield();
+    friend bool verona::rt::yield();
 
     static constexpr uint64_t TSC_PAUSE_SLOP = 1'000'000;
     static constexpr uint64_t TSC_UNPAUSE_SLOP = TSC_PAUSE_SLOP / 2;
@@ -185,11 +185,11 @@ namespace verona::rt
       return nonlocal;
     }
 
-    static void schedule(Work* w)
+    static void schedule(Work* w, bool fifo = true)
     {
       auto* t = local();
 
-      if (t != nullptr)
+      if (t != nullptr && fifo)
       {
         t->schedule_fifo(w);
         return;
@@ -199,7 +199,7 @@ namespace verona::rt
       T::schedule_lifo(core, w);
     }
 
-    void init(size_t count)
+    void init(size_t count, void (*run_at_termination)(void) = nullptr)
     {
       Logging::cout() << "Init runtime" << Logging::endl;
 
@@ -219,6 +219,7 @@ namespace verona::rt
       {
         T* t = new T;
         t->systematic_id = count;
+        t->run_at_termination = run_at_termination;
 #ifdef USE_SYSTEMATIC_TESTING
         t->local_systematic =
           Systematic::create_systematic_thread(t->systematic_id);
@@ -266,7 +267,7 @@ namespace verona::rt
       // Flush any cowns that weren't collected due to potential
       // ABA issues on the queue.  The runtime is in a consistent
       // state so no ABAs can exist anymore.
-      Epoch::flush(ThreadAlloc::get());
+      Epoch::flush();
 
       core_pool.clear();
 
@@ -287,7 +288,7 @@ namespace verona::rt
       {
         Logging::cout() << "Checking for pending work on thread " << c->affinity
                         << Logging::endl;
-        if (!c->q.nothing_old())
+        if (!c->q.is_empty())
         {
           Logging::cout() << "Found pending work!" << Logging::endl;
           return true;

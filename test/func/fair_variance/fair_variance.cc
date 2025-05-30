@@ -10,7 +10,7 @@ using namespace snmalloc;
 using namespace verona::rt;
 using namespace verona::cpp;
 
-static constexpr int start_count = 1'00'000;
+static constexpr int start_count = 1'000'000;
 struct A
 {
   int id;
@@ -71,9 +71,10 @@ void assert_variance()
   {
     printf("cown[%d] took %f\n", i, elapsed_secs[i]);
   }
-  if ((max - min) / max > 0.15)
+  auto variance = (max - min) / max;
+  printf("(max - min) / max = %f\n", variance);
+  if (variance > 0.15)
   {
-    printf("(max - min) / max = %f\n", (max - min) / max);
     printf("variance too large");
     check(false);
   }
@@ -93,7 +94,7 @@ int main()
   spawn();
 
   sched.run();
-  snmalloc::debug_check_empty<snmalloc::Alloc::Config>();
+  heap::debug_check_empty();
   assert_variance();
 
   puts("done");

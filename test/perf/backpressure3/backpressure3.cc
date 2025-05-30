@@ -13,7 +13,6 @@
 
 #include "debug/log.h"
 #include "test/opt.h"
-#include "test/xoroshiro.h"
 #include "verona.h"
 
 #include <chrono>
@@ -26,7 +25,7 @@ struct Sender;
 struct Receiver : public VCown<Receiver>
 {
   std::vector<Sender*>& senders;
-  xoroshiro::p128r32 rng;
+  PRNG<> rng;
   size_t msgs = 0;
   timer::time_point prev = timer::now();
 
@@ -50,15 +49,14 @@ struct Receive
 
   void operator()()
   {
-    auto& alloc = ThreadAlloc::get();
     if (s == nullptr)
     {
       s = r->senders[r->rng.next() % r->senders.size()];
-      auto** cowns = (Cown**)alloc.alloc<2 * sizeof(Cown*)>();
+      auto** cowns = (Cown**)heap::alloc<2 * sizeof(Cown*)>();
       cowns[0] = (Cown*)r;
       cowns[1] = (Cown*)s;
-      Behaviour::schedule<Receive>(2, cowns, r, s);
-      alloc.dealloc<2 * sizeof(Cown*)>(cowns);
+      schedule_lambda(2, cowns, Receive(r, s));
+      heap::dealloc<2 * sizeof(Cown*)>(cowns);
     }
     else
     {
@@ -103,14 +101,14 @@ struct Send
 
   void operator()()
   {
-    Behaviour::schedule<Receive>(s->receiver, s->receiver);
+    schedule_lambda(s->receiver, Receive(s->receiver));
 
     if ((timer::now() - s->start) < s->duration)
-      Behaviour::schedule<Send>(s, s);
+      schedule_lambda(s, Send(s));
     else
     {
       // Break cycle between sender and receiver.
-      Cown::release(ThreadAlloc::get(), s->receiver);
+      Cown::release(s->receiver);
       s->receiver = nullptr;
     }
   }
@@ -128,6 +126,10 @@ int main(int argc, char** argv)
   logger::cout() << "cores: " << cores << ", senders: " << senders
                  << ", duration: " << duration.count() << "ms" << std::endl;
 
+#if defined(USE_FLIGHT_RECORDER) || defined(CI_BUILD)
+  Logging::enable_crash_logging();
+#endif
+
 #ifdef USE_SYSTEMATIC_TESTING
   Logging::enable_logging();
   Systematic::set_seed(seed);
@@ -137,20 +139,18 @@ int main(int argc, char** argv)
   sched.set_fair(true);
   sched.init(cores);
 
-  auto& alloc = ThreadAlloc::get();
-
   static std::vector<Sender*> sender_set;
-  auto* receiver = new (alloc) Receiver(sender_set, seed);
+  auto* receiver = new Receiver(sender_set, seed);
 
   for (size_t s = 0; s < senders; s++)
   {
     Cown::acquire(receiver);
-    sender_set.push_back(new (alloc) Sender(duration, receiver));
+    sender_set.push_back(new Sender(duration, receiver));
   }
 
   for (auto* s : sender_set)
-    Behaviour::schedule<Send, NoTransfer>(s, s);
-  Cown::release(alloc, receiver);
+    schedule_lambda<NoTransfer>(s, Send(s));
+  Cown::release(receiver);
 
   sched.run();
 

@@ -65,7 +65,7 @@ namespace Logging
   };
 
   // Filled in later by the scheduler thread
-  std::string get_systematic_id();
+  const std::string& get_systematic_id();
 
   class LocalLog : public snmalloc::Pooled<LocalLog>
   {
@@ -185,7 +185,7 @@ namespace Logging
     }
   };
 
-  using LocalLogPool = snmalloc::Pool<LocalLog, snmalloc::Alloc::Config>;
+  using LocalLogPool = snmalloc::Pool<LocalLog>;
 
   class ThreadLocalLog
   {
@@ -356,6 +356,14 @@ namespace Logging
     inline SysLog& operator<<(const void* value)
     {
       return inner_cons(value);
+    }
+
+    inline SysLog& operator<<(bool value)
+    {
+      if (value)
+        return inner_cons("true");
+      else
+        return inner_cons("false");
     }
 
     template<typename T>

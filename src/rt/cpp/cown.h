@@ -99,8 +99,7 @@ namespace verona::cpp
         // Condition to handle moved weak cown ptrs.
         if (allocated_cown != nullptr)
         {
-          auto& alloc = verona::rt::ThreadAlloc::get();
-          allocated_cown->weak_release(alloc);
+          allocated_cown->weak_release();
           allocated_cown = nullptr;
         }
       }
@@ -198,6 +197,9 @@ namespace verona::cpp
   private:
     template<typename TT>
     friend class Access;
+
+    template<typename TT>
+    friend class AccessBatch;
 
     /**
      * Internal Verona runtime cown for this type.
@@ -314,8 +316,7 @@ namespace verona::cpp
       // Condition to handle moved cown ptrs.
       if (allocated_cown != nullptr)
       {
-        auto& alloc = verona::rt::ThreadAlloc::get();
-        verona::rt::Cown::release(alloc, allocated_cown);
+        verona::rt::Cown::release(allocated_cown);
         allocated_cown = nullptr;
       }
     }
@@ -357,7 +358,7 @@ namespace verona::cpp
     template<typename TT, typename... Args>
     friend cown_ptr<TT> make_cown_custom(void *addr, Args&&...);
 
-    template<typename...>
+    template<typename F, typename... Args2>
     friend class When;
 
     template<typename TT>
@@ -451,9 +452,12 @@ namespace verona::cpp
   template<typename T>
   class acquired_cown
   {
-    /// Needed to build one from inside a `when`
-    template<typename...>
+    /// Needed to build one from inside a `When`
+    template<typename F, typename... Args2>
     friend class When;
+
+    template<typename T2>
+    friend class AccessBatch;
 
   private:
     /// Underlying cown that has been acquired.

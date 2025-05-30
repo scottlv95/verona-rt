@@ -59,16 +59,17 @@ namespace verona::rt
    *     let rec freeze_inner(x) =
    *       match rep(x).status with
    *       | UNMARKED =>
-   *         x.set_pending();
+   *         x.status = PENDING(0);
    *         pending.push(x);
    *         for each f in x
    *           freeze_inner(x.f)
    *         if (pending.peek() == x)         // (A) Post-order check
-   *           x."makescc with ref count 1"()
+   *           pending.pop()
+   *           rep(x).status = RC(1);
    *
    *       | PENDING(N) =>
-   *         while (rep(x) != rep(pending.peek()))
-   *           union(x, pending.pop())
+   *         while (union(x, pending.peek()))
+   *           pending.pop()
    *
    *       | RC(N) =>
    *           x.status = RC(N+1)
@@ -131,15 +132,15 @@ namespace verona::rt
     }
 
   public:
-    static void apply(Alloc& alloc, Object* o)
+    static void apply(Object* o)
     {
       assert(o->debug_is_iso());
 
-      ObjectStack objects(alloc);
-      ObjectStack dfs(alloc);
-      ObjectStack iso(alloc);
-      ObjectStack pending(alloc);
-      ObjectStack dealloc_regions(alloc);
+      ObjectStack objects;
+      ObjectStack dfs;
+      ObjectStack iso;
+      ObjectStack pending;
+      ObjectStack dealloc_regions;
 
       iso.push(o);
 
@@ -295,7 +296,7 @@ namespace verona::rt
               while (!dealloc_regions.empty())
               {
                 Object* q = dealloc_regions.pop();
-                Region::release(alloc, q);
+                Region::release(q);
               }
 
               p = next;
@@ -331,16 +332,18 @@ namespace verona::rt
         {
           Object* q = to_dealloc.pop();
           q->destructor();
-          q->dealloc(alloc);
+          q->dealloc();
         }
 
-        reg->discard(alloc);
-        reg->dealloc(alloc);
+        reg->discard();
+        reg->dealloc();
       }
 
       assert(objects.empty());
       assert(dfs.empty());
       assert(iso.empty());
+      assert(pending.empty());
+      assert(dealloc_regions.empty());
     }
   };
 } // namespace verona::rt

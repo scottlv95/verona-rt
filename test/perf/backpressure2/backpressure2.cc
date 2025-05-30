@@ -14,7 +14,6 @@
 
 #include "debug/log.h"
 #include "test/opt.h"
-#include "test/xoroshiro.h"
 #include "verona.h"
 
 #include <chrono>
@@ -37,9 +36,18 @@ struct Receive
   : receivers(receivers_), receiver_count(receiver_count_)
   {}
 
+  Receive(Receive&& o) noexcept
+  {
+    receiver_count = o.receiver_count;
+    receivers = o.receivers;
+
+    o.receivers = nullptr;
+  }
+
   ~Receive()
   {
-    ThreadAlloc::get().dealloc(receivers, receiver_count * sizeof(Receiver*));
+    if (receivers)
+      heap::dealloc(receivers, receiver_count * sizeof(Receiver*));
   }
 
   void trace(ObjectStack& st) const
@@ -73,14 +81,11 @@ struct Sender : public VCown<Sender>
   timer::time_point start = timer::now();
   timer::duration duration;
   std::vector<Receiver*>& receivers;
-  xoroshiro::p128r32 rng;
+  PRNG<> rng;
 
   Sender(
-    timer::duration duration_,
-    std::vector<Receiver*>& receivers_,
-    size_t seed1,
-    size_t seed2)
-  : duration(duration_), receivers(receivers_), rng(seed1, seed2)
+    timer::duration duration_, std::vector<Receiver*>& receivers_, size_t seed1)
+  : duration(duration_), receivers(receivers_), rng(seed1)
   {}
 
   void trace(ObjectStack& st) const
@@ -102,7 +107,7 @@ struct Send
     const size_t receiver_count = (s->rng.next() % max_receivers) + 1;
 
     auto** receivers =
-      (Receiver**)ThreadAlloc::get().alloc(receiver_count * sizeof(Receiver*));
+      (Receiver**)heap::alloc(receiver_count * sizeof(Receiver*));
 
     for (size_t i = 0; i < receiver_count;)
     {
@@ -111,11 +116,11 @@ struct Send
         i++;
     }
 
-    Behaviour::schedule<Receive>(
-      receiver_count, (Cown**)receivers, receivers, receiver_count);
+    schedule_lambda(
+      receiver_count, (Cown**)receivers, Receive(receivers, receiver_count));
 
     if ((timer::now() - s->start) < s->duration)
-      Behaviour::schedule<Send>(s, s);
+      schedule_lambda(s, Send(s));
   }
 };
 
@@ -131,6 +136,10 @@ int main(int argc, char** argv)
                  << ", receivers: " << receivers << ", duration: " << duration
                  << "ms" << std::endl;
 
+#if defined(USE_FLIGHT_RECORDER) || defined(CI_BUILD)
+  Logging::enable_crash_logging();
+#endif
+
 #ifdef USE_SYSTEMATIC_TESTING
   Logging::enable_logging();
   Systematic::set_seed(seed);
@@ -140,25 +149,23 @@ int main(int argc, char** argv)
   sched.set_fair(true);
   sched.init(cores);
 
-  auto& alloc = ThreadAlloc::get();
-
   static std::vector<Receiver*> receiver_set;
   for (size_t i = 0; i < receivers; i++)
-    receiver_set.push_back(new (alloc) Receiver);
+    receiver_set.push_back(new Receiver);
 
-  xoroshiro::p128r32 rng(seed);
+  verona::rt::PRNG<> rng(seed);
   for (size_t i = 0; i < senders; i++)
   {
     for (auto* r : receiver_set)
       Cown::acquire(r);
 
-    auto* s = new (alloc) Sender(
-      std::chrono::milliseconds(duration), receiver_set, seed, rng.next());
-    Behaviour::schedule<Send, YesTransfer>(s, s);
+    auto* s =
+      new Sender(std::chrono::milliseconds(duration), receiver_set, rng.next());
+    schedule_lambda<YesTransfer>(s, Send(s));
   }
 
   for (auto* r : receiver_set)
-    Cown::release(alloc, r);
+    Cown::release(r);
 
   sched.run();
 }

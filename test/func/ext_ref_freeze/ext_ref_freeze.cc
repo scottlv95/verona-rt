@@ -62,8 +62,6 @@ struct Loop
   {
     auto& state = a->state;
 
-    auto& alloc = ThreadAlloc::get();
-    (void)alloc;
     switch (state)
     {
       case SETUP:
@@ -79,26 +77,26 @@ struct Loop
         }
 
         a->r = r;
-        RegionTrace::insert<YesTransfer>(alloc, a->r, a->r->f1->b);
+        RegionTrace::insert<YesTransfer>(a->r, a->r->f1->b);
         {
           UsingRegion ur(a->r);
           g_ext_ref = create_external_reference(a->r->f1);
         }
         freeze(a->r);
         state = REUSE;
-        Behaviour::schedule<Loop>(a, a);
+        schedule_lambda(a, Loop(a));
         return;
       }
       case REUSE:
       {
         state = EXIT;
-        Behaviour::schedule<Ping>(a->r->f1->b);
-        Behaviour::schedule<Loop>(a, a);
+        schedule_lambda(a->r->f1->b, Ping());
+        schedule_lambda(a, Loop(a));
         return;
       }
       case EXIT:
       {
-        Immutable::release(alloc, g_ext_ref);
+        Immutable::release(g_ext_ref);
         g_ext_ref = nullptr;
         return;
       }
@@ -122,10 +120,9 @@ struct Loop
 // 4. Clean up resource, and exit.
 void run_test()
 {
-  auto& alloc = ThreadAlloc::get();
   auto a = new A;
-  Behaviour::schedule<Loop>(a, a);
-  Cown::release(alloc, a);
+  schedule_lambda(a, Loop(a));
+  Cown::release(a);
 }
 
 int main(int argc, char** argv)

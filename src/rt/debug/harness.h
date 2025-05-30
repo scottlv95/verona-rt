@@ -4,6 +4,7 @@
 
 #include <cassert>
 #include <chrono>
+#include <functional>
 #include <list>
 #include <test/opt.h>
 #include <verona.h>
@@ -84,6 +85,8 @@ public:
   size_t seed_upper;
   high_resolution_clock::time_point start;
 
+  void (*run_at_termination)(void) = nullptr;
+
   SystematicTestHarness(int argc, const char* const* argv) : opt(argc, argv)
   {
     std::cout << "Harness starting." << std::endl;
@@ -134,56 +137,82 @@ public:
 #endif
   }
 
-  template<typename... Args>
-  void run(void f(Args...), Args... args)
+  template<typename F, typename... Args>
+  void run_with_seed(F&& f, Args... args)
+  {
+    std::cout << "Seed: " << seed << std::endl;
+
+    Scheduler& sched = Scheduler::get();
+#ifdef USE_SYSTEMATIC_TESTING
+    if (seed % 2 == 1)
+    {
+      sched.set_fair(true);
+    }
+    else
+    {
+      sched.set_fair(false);
+    }
+#else
+    UNUSED(seed);
+#endif
+
+    sched.init(cores, run_at_termination);
+
+    f(std::forward<Args>(args)...);
+
+    sched.run();
+
+    Logging::cout() << "Joining external threads" << std::endl;
+
+    // Join on all created external threads and clear the list.
+    while (!external_threads.empty())
+    {
+      auto& thread = external_threads.front();
+      thread.join();
+      external_threads.pop_front();
+    }
+
+    Logging::cout() << "External threads joined" << std::endl;
+
+    LocalEpochPool::sort();
+
+    if (detect_leaks)
+      heap::debug_check_empty();
+    high_resolution_clock::time_point t1 = high_resolution_clock::now();
+    std::cout << "Time so far: " << duration_cast<seconds>((t1 - start)).count()
+              << " seconds" << std::endl;
+
+    std::cout << "Test Harness Finished!" << std::endl;
+  }
+
+  template<typename F, typename... Args>
+  void run(F&& f, Args... args)
   {
     for (seed = seed_lower; seed < seed_upper; seed++)
     {
-      std::cout << "Seed: " << seed << std::endl;
-
-      Scheduler& sched = Scheduler::get();
-#ifdef USE_SYSTEMATIC_TESTING
       Systematic::set_seed(seed);
-      if (seed % 2 == 1)
-      {
-        sched.set_fair(true);
-      }
-      else
-      {
-        sched.set_fair(false);
-      }
-#else
-      UNUSED(seed);
-#endif
-      sched.init(cores);
-
-      f(std::forward<Args>(args)...);
-
-      sched.run();
-
-      Logging::cout() << "Joining external threads" << std::endl;
-
-      // Join on all created external threads and clear the list.
-      while (!external_threads.empty())
-      {
-        auto& thread = external_threads.front();
-        thread.join();
-        external_threads.pop_front();
-      }
-
-      Logging::cout() << "External threads joined" << std::endl;
-
-      LocalEpochPool::sort();
-
-      if (detect_leaks)
-        snmalloc::debug_check_empty<snmalloc::Alloc::Config>();
-      high_resolution_clock::time_point t1 = high_resolution_clock::now();
-      std::cout << "Time so far: "
-                << duration_cast<seconds>((t1 - start)).count() << " seconds"
-                << std::endl;
+      run_with_seed(f, std::forward<Args>(args)...);
     }
+  }
 
-    std::cout << "Test Harness Finished!" << std::endl;
+  void
+  run_many(std::vector<std::pair<std::function<void()>, std::string>> tests)
+  {
+#ifdef USE_SYSTEMATIC_TESTING
+    for (seed = seed_lower; seed < seed_upper; seed++)
+    {
+      Systematic::set_seed(seed);
+      auto test = tests[Systematic::get_prng_next() % tests.size()];
+      std::cout << "Running test: " << test.second << std::endl;
+      run_with_seed(test.first);
+    }
+#else
+    for (auto& test : tests)
+    {
+      std::cout << "Running test: " << test.second << std::endl;
+      run(test.first);
+    }
+#endif
   }
 
   /**

@@ -36,7 +36,7 @@ struct KeepAlive
   KeepAlive()
   {
     c = new Fork(999);
-    Behaviour::schedule<Ping>(c);
+    schedule_lambda(c, Ping());
   }
 
   void trace(ObjectStack& fields) const
@@ -46,7 +46,7 @@ struct KeepAlive
 
   void operator()()
   {
-    Behaviour::schedule<Ping, YesTransfer>(c);
+    schedule_lambda<YesTransfer>(c, Ping());
   }
 };
 
@@ -98,7 +98,7 @@ struct Eat
       ((Fork*)f)->uses++;
     }
 
-    Behaviour::schedule<Ponder>(eater, eater);
+    schedule_lambda(eater, Ponder(eater));
   }
 
   Eat(Philosopher* p_) : eater(p_)
@@ -118,17 +118,16 @@ void eat_send(Philosopher* p)
 {
   if (p->to_eat == 0)
   {
-    auto& alloc = ThreadAlloc::get();
     Logging::cout() << "Releasing Philosopher " << p->id << " " << p
                     << std::endl;
-    Cown::release(alloc, p);
+    Cown::release(p);
     return;
   }
 
   p->to_eat--;
-  Behaviour::schedule<Eat>(p->forks.size(), p->forks.data(), p);
+  schedule_lambda(p->forks.size(), p->forks.data(), Eat(p));
 
-  Behaviour::schedule<KeepAlive>(p->forks[0]);
+  schedule_lambda(p->forks[0], KeepAlive());
 }
 
 void test_dining(
@@ -145,8 +144,8 @@ void test_dining(
     Logging::cout() << "Fork " << i << " " << f << std::endl;
   }
 
-  verona::Scramble scrambler;
-  xoroshiro::p128r32 rand(h->current_seed());
+  verona::rt::Scramble scrambler;
+  verona::rt::PRNG<> rand{h->current_seed()};
 
   for (size_t i = 0; i < philosophers; i++)
   {
@@ -167,7 +166,7 @@ void test_dining(
     }
 
     auto p = new Philosopher(i, my_forks, hunger);
-    Behaviour::schedule<Ponder>(p, p);
+    schedule_lambda(p, Ponder(p));
     Logging::cout() << "Philosopher " << i << " " << p << std::endl;
     for (size_t j = 0; j < fork_count; j++)
     {
@@ -178,7 +177,7 @@ void test_dining(
 
   for (size_t i = 0; i < philosophers; i++)
   {
-    Cown::release(ThreadAlloc::get(), forks[i]);
+    Cown::release(forks[i]);
   }
 }
 

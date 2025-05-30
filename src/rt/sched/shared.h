@@ -45,7 +45,7 @@ namespace verona::rt
 #endif
     }
 
-    static void release(Alloc& alloc, Shared* o)
+    static void release(Shared* o)
     {
 #if 0
       Logging::cout() << "Shared " << o << " release" << Logging::endl;
@@ -59,7 +59,7 @@ namespace verona::rt
 
       if (release_weak)
       {
-        o->weak_release(alloc);
+        o->weak_release();
         yield();
       }
 
@@ -79,7 +79,7 @@ namespace verona::rt
     /**
      * Release a weak reference to this cown.
      **/
-    void weak_release(Alloc& alloc)
+    void weak_release()
     {
       Logging::cout() << "Cown " << this << " weak release" << Logging::endl;
       if (weak_count.fetch_sub(1) == 1)
@@ -88,7 +88,7 @@ namespace verona::rt
 
         Logging::cout() << "Cown " << this << " no references left."
                         << Logging::endl;
-        dealloc(alloc);
+        dealloc();
       }
     }
 
@@ -118,9 +118,9 @@ namespace verona::rt
     }
 
   private:
-    void dealloc(Alloc& alloc)
+    void dealloc()
     {
-      Object::dealloc(alloc);
+      Object::dealloc();
       yield();
     }
 
@@ -129,7 +129,7 @@ namespace verona::rt
      * Uses thread_local state to deal with deep deallocation
      * chains by queuing recursive calls.
      **/
-    void queue_collect(Alloc& alloc)
+    void queue_collect()
     {
       thread_local ObjectStack* work_list = nullptr;
 
@@ -143,26 +143,26 @@ namespace verona::rt
       }
 
       // Make queue for recursive deallocations.
-      ObjectStack current(alloc);
+      ObjectStack current;
       work_list = &current;
 
       // Collect the current cown
-      collect(alloc);
+      collect();
       yield();
-      weak_release(alloc);
+      weak_release();
 
       // Collect recursively reachable cowns
       while (!current.empty())
       {
         auto a = (Shared*)current.pop();
-        a->collect(alloc);
+        a->collect();
         yield();
-        a->weak_release(alloc);
+        a->weak_release();
       }
       work_list = nullptr;
     }
 
-    void collect(Alloc& alloc)
+    void collect()
     {
 #ifdef USE_SYSTEMATIC_TESTING_WEAK_NOTICEBOARDS
 // TODO THINK
@@ -171,13 +171,13 @@ namespace verona::rt
 #endif
       Logging::cout() << "Collecting cown " << this << Logging::endl;
 
-      ObjectStack dummy(alloc);
+      ObjectStack dummy;
       // Run finaliser before releasing our data.
       // Sub-regions handled by code below.
       finalise(nullptr, dummy);
 
       // Release our data.
-      ObjectStack f(alloc);
+      ObjectStack f;
       trace(f);
 
       while (!f.empty())
@@ -187,18 +187,18 @@ namespace verona::rt
         switch (o->get_class())
         {
           case RegionMD::ISO:
-            Region::release(alloc, o);
+            Region::release(o);
             break;
 
           case RegionMD::RC:
           case RegionMD::SCC_PTR:
-            Immutable::release(alloc, o);
+            Immutable::release(o);
             break;
 
           case RegionMD::SHARED:
             Logging::cout()
               << "DecRef from " << this << " to " << o << Logging::endl;
-            Shared::release(alloc, (Shared*)o);
+            Shared::release((Shared*)o);
             break;
 
           default:
@@ -215,7 +215,7 @@ namespace verona::rt
 
   namespace shared
   {
-    inline void release(Alloc& alloc, Object* o)
+    inline void release(Object* o)
     {
 #if 0
       assert(o->debug_is_shared());

@@ -5,14 +5,13 @@
 #include "../debug/logging.h"
 #include "../debug/systematic.h"
 #include "../ds/bag.h"
+#include "../ds/heap.h"
 #include "../ds/stack.h"
-
-#include <snmalloc/snmalloc.h>
 
 namespace verona::rt
 {
   class Cown;
-  static void yield();
+  static bool yield();
   /**!object.md
    * Object representation
    * =====================
@@ -68,10 +67,10 @@ namespace verona::rt
   class Object;
   class RegionBase;
 
-  using RefCounts = Bag<Object, uintptr_t, Alloc>;
+  using RefCounts = Bag<Object, uintptr_t>;
   using RefCount = RefCounts::Elem;
 
-  using ObjectStack = Stack<Object, Alloc>;
+  using ObjectStack = Stack<Object>;
   static constexpr size_t descriptor_alignment =
     snmalloc::bits::min<size_t>(8, alignof(void*));
 
@@ -185,7 +184,7 @@ namespace verona::rt
     // snmalloc will ensure that Objects are properly aligned. However, in some
     // situations, e.g. allocating within a RegionArena, we still need to
     // ensure that pointers to objects are aligned.
-    static constexpr size_t ALIGNMENT = (1 << MIN_ALLOC_BITS);
+    static constexpr size_t ALIGNMENT = MIN_ALLOC_SIZE;
 
     /// This class represents the Verona object header.
     /// It is stored directly before a Verona object.
@@ -218,7 +217,7 @@ namespace verona::rt
 
 #ifdef USE_SYSTEMATIC_TESTING
     // Used to give objects unique identifiers for systematic testing.
-    inline static std::atomic<size_t> id_source = 0;
+    inline static std::atomic<size_t> id_source = 1;
 #endif
 
     Header& get_header() const
@@ -295,7 +294,7 @@ namespace verona::rt
 #ifdef USE_SYSTEMATIC_TESTING
     inline static void reset_ids()
     {
-      id_source = 0;
+      id_source = 1;
     }
 #endif
 
@@ -567,9 +566,34 @@ namespace verona::rt
       return get_header().bits >> SHIFT;
     }
 
+#ifdef VERONA_BENCHMARK_SCC_FIND_STATS
+  private:
+    // Tracks the sum of the length of all find operations.
+    static inline size_t find_count{0};
+
+    static inline void inc_find_count()
+    {
+      find_count++;
+    }
+
+  public:
+    static inline size_t get_find_count()
+    {
+      return find_count;
+    }
+
+    static inline void reset_find_count()
+    {
+      find_count = 0;
+    }
+#else
+    static inline void inc_find_count() {}
+#endif
+
     inline Object* root_and_class(RegionMD& c)
     {
       c = get_class();
+      inc_find_count();
 
       switch (c)
       {
@@ -577,9 +601,11 @@ namespace verona::rt
         {
           auto parent = get_scc();
           auto curr = this;
+          inc_find_count();
 
           while ((c = parent->get_class()) == RegionMD::SCC_PTR)
           {
+            inc_find_count();
             auto grand_parent = parent->get_scc();
             curr->set_scc(grand_parent);
             curr = parent;
@@ -836,7 +862,7 @@ namespace verona::rt
         get_descriptor()->destructor(this);
     }
 
-    inline void dealloc(Alloc& alloc)
+    inline void dealloc()
     {
       // Make sure this is never called if all cowns are custom allocated
       assert(0);
